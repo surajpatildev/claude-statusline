@@ -1,6 +1,7 @@
 #!/bin/bash
 # Claude Code Statusline — "Terminus"
 # Cold steel palette, slim ▬ bar, single line.
+# Context % is normalized to usable context (before auto-compact kicks in).
 #
 # ◆ Opus ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬ 42% │ ⌂ my-project ⎇ feat/login +689 −293 │ $4.42 ⏱ 26m
 
@@ -11,6 +12,7 @@ NOW=$(date +%s)
 
 RST='\033[0m'
 BLD='\033[1m'
+BLINK='\033[5m'
 
 C_W='\033[38;5;252m'          # primary text
 C_DIM='\033[38;5;243m'        # secondary / duration
@@ -23,9 +25,10 @@ C_TEAL='\033[38;5;116m'       # additions
 C_ROSE='\033[38;5;174m'       # deletions
 C_SILVER='\033[38;5;249m'     # haiku dot
 
-C_BAR_OK='\033[38;5;33m'      # bar <70%
-C_BAR_WARN='\033[38;5;172m'   # bar 70–89%
-C_BAR_CRIT='\033[38;5;131m'   # bar ≥90%
+C_BAR_LO='\033[38;5;33m'     # bar <50%   — cool
+C_BAR_MID='\033[38;5;178m'   # bar 50–69% — warm
+C_BAR_WARN='\033[38;5;208m'  # bar 70–84% — hot
+C_BAR_CRIT='\033[38;5;196m'  # bar ≥85%   — critical
 
 SEP=" ${C_SEP}│${RST} "
 
@@ -33,8 +36,9 @@ SEP=" ${C_SEP}│${RST} "
 
 GIT_TTL=5          # seconds between git refreshes
 BAR_W=20           # progress bar width (chars)
+PCT_MID=50         # context % → mid color
 PCT_WARN=70        # context % → warning color
-PCT_CRIT=90        # context % → critical color
+PCT_CRIT=85        # context % → critical color
 
 # ── Helpers ──────────────────────────────────────────────────
 
@@ -42,6 +46,9 @@ file_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || ech
 is_fresh()   { [ -f "$1" ] && [ $((NOW - $(file_mtime "$1"))) -le "$2" ]; }
 
 # ── Data (single jq call) ───────────────────────────────────
+# Claude Code reserves ~16.5% of the context window as a compaction buffer.
+# We normalize remaining_percentage against the 83.5% usable window so the
+# bar reads 100% right when auto-compact would fire, not at the raw limit.
 
 {
   read -r MODEL_ID
@@ -57,7 +64,11 @@ is_fresh()   { [ -f "$1" ] && [ $((NOW - $(file_mtime "$1"))) -le "$2" ]; }
   (.model.id // "unknown"),
   (.model.display_name // "Claude"),
   (.workspace.current_dir // .cwd // ""),
-  (.context_window.used_percentage // 0 | floor),
+  (
+    (.context_window.remaining_percentage // 100) as $rem |
+    ((($rem - 16.5) / 83.5 * 100) | if . < 0 then 0 else . end) as $usable_rem |
+    (100 - $usable_rem) | if . < 0 then 0 elif . > 100 then 100 else . end | floor
+  ),
   (.cost.total_cost_usd // 0),
   (.cost.total_duration_ms // 0),
   (.cost.total_lines_added // 0),
@@ -107,9 +118,11 @@ FILLED=$((PCT * BAR_W / 100))
 [ "$FILLED" -gt "$BAR_W" ] && FILLED=$BAR_W
 EMPTY=$((BAR_W - FILLED))
 
-if   [ "$PCT" -ge "$PCT_CRIT" ]; then BAR_C="$C_BAR_CRIT"; PCT_C="$C_BAR_CRIT"
-elif [ "$PCT" -ge "$PCT_WARN" ]; then BAR_C="$C_BAR_WARN"; PCT_C="$C_BAR_WARN"
-else                                   BAR_C="$C_BAR_OK";   PCT_C="$C_W"
+CTX_EMOJI=""
+if   [ "$PCT" -ge "$PCT_CRIT" ]; then BAR_C="$C_BAR_CRIT"; PCT_C="${BLINK}${C_BAR_CRIT}"; CTX_EMOJI="💀 "
+elif [ "$PCT" -ge "$PCT_WARN" ]; then BAR_C="$C_BAR_WARN"; PCT_C="$C_BAR_WARN";           CTX_EMOJI="🔥 "
+elif [ "$PCT" -ge "$PCT_MID"  ]; then BAR_C="$C_BAR_MID";  PCT_C="$C_BAR_MID"
+else                                   BAR_C="$C_BAR_LO";   PCT_C="$C_W"
 fi
 
 BAR=""
@@ -127,7 +140,7 @@ fi
 
 # ── Assemble ─────────────────────────────────────────────────
 
-G1="${DOT}◆${RST} ${BLD}${C_W}${MODEL}${RST} ${BAR} ${PCT_C}${PCT}%${RST}"
+G1="${DOT}◆${RST} ${BLD}${C_W}${MODEL}${RST} ${BAR} ${PCT_C}${CTX_EMOJI}${PCT}%${RST}"
 
 G2="${C_DIM}⌂${RST} ${C_W}${PROJECT}${RST}"
 [ -n "$GIT_BR" ]         && G2="${G2}  ${C_BLUE}⎇ ${GIT_BR}${RST}"
