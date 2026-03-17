@@ -3,7 +3,7 @@
 # Cold steel palette, slim ▬ bar, single line.
 # Context % is normalized to usable context (before auto-compact kicks in).
 #
-# ◆ Opus ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬ 42% │ ⌂ my-project ⎇ feat/login +689 −293 │ $4.42 ⏱ 26m
+# ◆ Opus ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬ 42% · 85K/200K │ ⌂ my-project ⎇ feat/login +689 −293 │ $4.42 ⏱ 26m
 
 INPUT=$(</dev/stdin)
 NOW=$(date +%s)
@@ -45,6 +45,18 @@ PCT_CRIT=85        # context % → critical color
 file_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
 is_fresh()   { [ -f "$1" ] && [ $((NOW - $(file_mtime "$1"))) -le "$2" ]; }
 
+fmt_tokens() {
+  local n=$1
+  if [ "$n" -ge 1000000 ]; then
+    local m=$((n / 1000000)) d=$(( (n % 1000000) / 100000 ))
+    if [ "$d" -gt 0 ]; then printf '%s.%sM' "$m" "$d"; else printf '%sM' "$m"; fi
+  elif [ "$n" -ge 1000 ]; then
+    printf '%sK' "$((n / 1000))"
+  else
+    printf '%s' "$n"
+  fi
+}
+
 # ── Data (single jq call) ───────────────────────────────────
 # Claude Code reserves ~16.5% of the context window as a compaction buffer.
 # We normalize remaining_percentage against the 83.5% usable window so the
@@ -59,6 +71,8 @@ is_fresh()   { [ -f "$1" ] && [ $((NOW - $(file_mtime "$1"))) -le "$2" ]; }
   read -r DUR_MS
   read -r L_ADD
   read -r L_DEL
+  read -r CTX_USED
+  read -r CTX_TOTAL
   read -r SESSION_ID
 } < <(printf '%s' "$INPUT" | jq -r '
   (.model.id // "unknown"),
@@ -73,6 +87,14 @@ is_fresh()   { [ -f "$1" ] && [ $((NOW - $(file_mtime "$1"))) -le "$2" ]; }
   (.cost.total_duration_ms // 0),
   (.cost.total_lines_added // 0),
   (.cost.total_lines_removed // 0),
+  (
+    .context_window.current_usage as $cu |
+    if $cu then
+      (($cu.input_tokens // 0) + ($cu.cache_creation_input_tokens // 0) + ($cu.cache_read_input_tokens // 0))
+    else 0
+    end
+  ),
+  (.context_window.context_window_size // 200000),
   (.session_id // "default")
 ')
 
@@ -129,6 +151,13 @@ BAR=""
 [ "$FILLED" -gt 0 ] && BAR="${BAR_C}${BAR_FULL:0:FILLED}${RST}"
 [ "$EMPTY"  -gt 0 ] && BAR="${BAR}${C_TRACK}${BAR_FULL:0:EMPTY}${RST}"
 
+# ── Context size (token count) ─────────────────────────────
+
+CTX_LABEL=""
+if [ "${CTX_TOTAL:-0}" -gt 0 ]; then
+  CTX_LABEL=" ${C_DIM}·${RST} ${BAR_C}$(fmt_tokens "${CTX_USED:-0}")${C_SEP}/${C_DIM}$(fmt_tokens "$CTX_TOTAL")${RST}"
+fi
+
 # ── Duration ─────────────────────────────────────────────────
 
 DUR_S=$((DUR_MS / 1000))
@@ -140,7 +169,7 @@ fi
 
 # ── Assemble ─────────────────────────────────────────────────
 
-G1="${DOT}◆${RST} ${BLD}${C_W}${MODEL}${RST} ${BAR} ${PCT_C}${CTX_EMOJI}${PCT}%${RST}"
+G1="${DOT}◆${RST} ${BLD}${C_W}${MODEL}${RST} ${BAR} ${PCT_C}${CTX_EMOJI}${PCT}%${RST}${CTX_LABEL}"
 
 G2="${C_DIM}⌂${RST} ${C_W}${PROJECT}${RST}"
 [ -n "$GIT_BR" ]         && G2="${G2}  ${C_BLUE}⎇ ${GIT_BR}${RST}"
